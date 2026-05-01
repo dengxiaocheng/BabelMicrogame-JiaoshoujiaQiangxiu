@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createInitialState, selectHotspot, addToRepairQueue,
   removeFromRepairQueue, reorderRepairQueue, dispatchRepair,
-  propagateRisk, tick, settleRound
+  propagateRisk, tick, settleRound, settleGame
 } from './state.js';
 
 describe('createInitialState', () => {
@@ -222,5 +222,76 @@ describe('state coupling', () => {
     assert.equal(next.time, 99);
     // Risk pressure: collapse pressure increased
     assert.ok(next.collapse_pressure > 10, 'pressure should increase from critical hotspots');
+  });
+});
+
+// ── ACCEPTANCE PLAYTHROUGH: scripted core loop verification ──
+describe('ACCEPTANCE_PLAYTHROUGH', () => {
+  it('full core loop: view -> select -> queue -> dispatch -> propagate -> tick', () => {
+    let s = createInitialState();
+    // Step 1: View risk map — state has risk_hotspots with risk values
+    assert.ok(s.risk_hotspots.length > 0, 'risk map must show hotspots');
+    assert.ok(s.risk_hotspots.every(h => typeof h.risk === 'number'), 'each hotspot has risk');
+
+    // Step 2: Select a hotspot (primary input on scene object)
+    s = selectHotspot(s, 6);
+    assert.equal(s.selected_hotspot, 6, 'player selected hotspot 6');
+
+    // Step 3: Add to repair queue (minimum interaction: allocate materials to hotspot)
+    s = addToRepairQueue(s, 6);
+    assert.deepEqual(s.repair_queue, [6], 'hotspot 6 queued for repair');
+
+    // Record pre-dispatch state for delta verification
+    const preMaterials = s.materials;
+    const prePressure = s.collapse_pressure;
+    const preRisk6 = s.risk_hotspots[6].risk;
+
+    // Step 4: Dispatch — consume materials, repair node, chain stress neighbors
+    s = dispatchRepair(s);
+    assert.ok(s.risk_hotspots[6].repaired, 'hotspot 6 is now repaired');
+    assert.ok(s.materials < preMaterials, 'materials consumed (resource pressure delta)');
+    assert.equal(s.repair_queue.length, 0, 'queue cleared after dispatch');
+
+    // Step 5: Propagate risk — neighbors feel chain stress
+    const preNeighborRisks = s.risk_hotspots[6].connections.map(cid => s.risk_hotspots[cid].risk);
+    s = propagateRisk(s);
+    // At least one neighbor should have risk change from propagation
+    const postNeighborRisks = s.risk_hotspots[6].connections.map(cid => s.risk_hotspots[cid].risk);
+    assert.ok(
+      postNeighborRisks.some((r, i) => r !== preNeighborRisks[i]),
+      'risk propagation changed at least one neighbor (risk pressure delta)'
+    );
+
+    // Step 6: Tick — time advances, pressure may rise
+    const preTime = s.time;
+    s = tick(s);
+    assert.ok(s.time < preTime, 'time decremented (progress pressure)');
+    assert.equal(s.phase, 'playing', 'game still playing after one cycle');
+  });
+
+  it('settleGame produces grades for different outcomes', () => {
+    // Win scenario: all repaired
+    let s = createInitialState();
+    s = { ...s, risk_hotspots: s.risk_hotspots.map(h => ({ ...h, repaired: true, risk: 0 })), phase: 'won' };
+    let result = settleGame(s);
+    assert.ok(['S', 'A', 'B'].includes(result.grade), `win grade should be S/A/B, got ${result.grade}`);
+    assert.ok(result.repaired === result.total);
+
+    // Loss scenario
+    s = createInitialState();
+    s = { ...s, collapse_pressure: 100, phase: 'lost' };
+    result = settleGame(s);
+    assert.equal(result.grade, 'F');
+    assert.equal(result.verdict, '结构坍塌');
+
+    // Partial win: decent repair ratio
+    s = createInitialState();
+    const half = Math.floor(s.risk_hotspots.length / 2);
+    s = {
+      ...s, phase: 'won', collapse_pressure: 40,
+      risk_hotspots: s.risk_hotspots.map((h, i) => i < half ? { ...h, repaired: true, risk: 0 } : h)
+    };
+    result = settleGame(s);
+    assert.ok(result.repairRatio >= 40, `repair ratio should be >=40%, got ${result.repairRatio}%`);
   });
 });
