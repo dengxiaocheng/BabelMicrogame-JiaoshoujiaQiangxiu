@@ -9,12 +9,16 @@ import { getChannelColor, getHotspotLabel } from './content/events.js';
 
 let state, canvas, ctx, queuePanel, tickTimer, propTimer, animFrame;
 let hoveredHotspot = null;
+let feedback = { propagatedIds: [], lastRepairId: null, lastRepairTime: 0 };
 
 export function init() {
   state = createInitialState();
   canvas = document.getElementById('risk-map');
   ctx = canvas.getContext('2d');
   queuePanel = document.getElementById('repair-queue');
+
+  // Inject urgency animation CSS
+  injectUrgencyStyles();
 
   // Click on risk map nodes — primary scene interaction
   canvas.addEventListener('click', e => {
@@ -42,10 +46,30 @@ export function init() {
     renderNodeInfo();
   });
 
-  // Dispatch button — consumes materials, repairs first queued node
+  // Dispatch button — core loop: dispatch → propagate → settle
   document.getElementById('btn-dispatch').addEventListener('click', () => {
+    const targetId = state.repair_queue.length > 0 ? state.repair_queue[0] : null;
     state = dispatchRepair(state);
+    if (state.phase === 'playing') {
+      // Close the core loop: propagate risk immediately after dispatch
+      const oldRisks = state.risk_hotspots.map(h => h.risk);
+      state = propagateRisk(state);
+      const propagatedIds = [];
+      for (let i = 0; i < state.risk_hotspots.length; i++) {
+        if (state.risk_hotspots[i].risk > oldRisks[i]) propagatedIds.push(i);
+      }
+      if (propagatedIds.length > 0) {
+        feedback = { ...feedback, propagatedIds };
+        setTimeout(() => { feedback = { ...feedback, propagatedIds: [] }; }, 3000);
+      }
+    }
     state = settleRound(state);
+    // Track repair burst feedback
+    if (targetId !== null) {
+      feedback = { ...feedback, lastRepairId: targetId, lastRepairTime: performance.now() };
+    }
+    // Briefly show step 4 (propagate) before render resets indicator
+    feedback = { ...feedback, stepHighlight: 'propagate', stepHighlightTime: performance.now() };
     renderDOM();
     if (state.phase !== 'playing') endGame();
   });
@@ -59,7 +83,18 @@ export function init() {
   }, 1000);
 
   propTimer = setInterval(() => {
+    // Snapshot risks before propagation to detect which nodes changed
+    const oldRisks = state.risk_hotspots.map(h => h.risk);
     state = propagateRisk(state);
+    const propagatedIds = [];
+    for (let i = 0; i < state.risk_hotspots.length; i++) {
+      if (state.risk_hotspots[i].risk > oldRisks[i]) propagatedIds.push(i);
+    }
+    if (propagatedIds.length > 0) {
+      feedback = { ...feedback, propagatedIds };
+      // Auto-clear ripple after 3 seconds
+      setTimeout(() => { feedback = { ...feedback, propagatedIds: [] }; }, 3000);
+    }
     state = settleRound(state);
     renderDOM();
     if (state.phase !== 'playing') endGame();
@@ -67,12 +102,26 @@ export function init() {
 
   // Continuous canvas animation loop for pulsing/glow effects
   function animate(ts) {
-    drawRiskMap(ctx, state, canvas.width, canvas.height, ts, hoveredHotspot);
+    drawRiskMap(ctx, state, canvas.width, canvas.height, ts, hoveredHotspot, feedback);
     animFrame = requestAnimationFrame(animate);
   }
   animFrame = requestAnimationFrame(animate);
 
   renderDOM();
+}
+
+function injectUrgencyStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes urgencyFlash {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .stat-time.urgent span { animation: urgencyFlash 0.8s infinite; color: #f44336 !important; }
+    .stat-mat.urgent span { animation: urgencyFlash 0.6s infinite; color: #f44336 !important; }
+    #pressure-wrap.urgent { animation: urgencyFlash 1s infinite; }
+  `;
+  document.head.appendChild(style);
 }
 
 function canvasHitTest(e) {
@@ -92,12 +141,19 @@ function renderDOM() {
   const total = state.risk_hotspots.length;
   document.getElementById('stat-progress').textContent = `${repaired}/${total}`;
 
-  // Pressure gauge — core pressure visibility
+  // Pressure gauge — core pressure visibility with risk summary
   const p = state.collapse_pressure;
   const fill = document.getElementById('pressure-fill');
   fill.style.width = p + '%';
   fill.style.background = p >= 80 ? '#f44336' : p >= 50 ? '#ff9800' : p >= 25 ? '#ffc107' : '#4caf50';
-  document.getElementById('pressure-text').textContent = `塌陷压力 ${p}%`;
+  const critCount = state.risk_hotspots.filter(h => !h.repaired && h.risk >= 80).length;
+  const highCount = state.risk_hotspots.filter(h => !h.repaired && h.risk >= 60 && h.risk < 80).length;
+  document.getElementById('pressure-text').textContent = `塌陷压力 ${p}%  ·  ${critCount} 危急  ${highCount} 高危`;
+
+  // Urgency classes: flash when critically low
+  document.querySelector('.stat-time').classList.toggle('urgent', state.time <= 60 && state.phase === 'playing');
+  document.querySelector('.stat-mat').classList.toggle('urgent', state.materials <= 5 && state.phase === 'playing');
+  document.getElementById('pressure-wrap').classList.toggle('urgent', p >= 75 && state.phase === 'playing');
 
   // Phase message
   const msg = document.getElementById('phase-msg');
@@ -117,7 +173,7 @@ function renderDOM() {
   const canDispatch = state.repair_queue.length > 0 && state.materials > 0 && state.phase === 'playing';
   btn.disabled = !canDispatch;
 
-  // Event log — show pending event messages
+  // Event log — consume pending event messages (clear after display)
   if (state.pending_events && state.pending_events.length > 0) {
     const eventLog = document.getElementById('event-log');
     for (const evt of state.pending_events) {
@@ -130,6 +186,7 @@ function renderDOM() {
         eventLog.removeChild(eventLog.lastChild);
       }
     }
+    state = { ...state, pending_events: [] };
   }
 
   updateStepIndicator();

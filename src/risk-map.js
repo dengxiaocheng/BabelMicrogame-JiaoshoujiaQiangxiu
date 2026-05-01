@@ -20,8 +20,109 @@ function riskColor(risk) {
   return '#4caf50';
 }
 
-export function drawRiskMap(ctx, state, w, h, timestamp, hoveredId) {
+// ── Cascade danger preview: animated chain-reaction paths from selected node ──
+function drawCascadePreview(ctx, state, selectedId, w, h, ts) {
+  if (selectedId === null) return;
+  const hs = state.risk_hotspots[selectedId];
+  if (!hs || hs.repaired) return;
+
+  const visited = new Set([selectedId]);
+  const frontier = [{ id: selectedId, depth: 0 }];
+
+  while (frontier.length > 0) {
+    const { id, depth } = frontier.shift();
+    if (depth >= 2) continue;
+    const node = state.risk_hotspots[id];
+    if (!node) continue;
+    const np = nodePos(node, w, h);
+
+    for (const cid of node.connections) {
+      if (visited.has(cid)) continue;
+      visited.add(cid);
+      const nb = state.risk_hotspots[cid];
+      if (nb.repaired) continue;
+      const npp = nodePos(nb, w, h);
+
+      // Animated danger line flowing outward
+      const alpha = 0.2 + Math.sin(ts / 350 + cid * 0.5) * 0.1;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = depth === 0 ? '#f44336' : '#ff9800';
+      ctx.lineWidth = 2.5 - depth * 0.8;
+      ctx.setLineDash([6 + depth * 2, 3 + depth]);
+      ctx.lineDashOffset = -ts / (80 + depth * 40);
+      ctx.beginPath();
+      ctx.moveTo(np.x, np.y);
+      ctx.lineTo(npp.x, npp.y);
+      ctx.stroke();
+      ctx.restore();
+
+      // Cascade impact badge on first-level connections
+      if (depth === 0) {
+        const impact = Math.ceil(nb.risk * 0.12);
+        const mx = (np.x + npp.x) / 2;
+        const my = (np.y + npp.y) / 2;
+        ctx.save();
+        ctx.globalAlpha = 0.7;
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ff5252';
+        ctx.fillText('+' + impact, mx, my - 7);
+        ctx.restore();
+      }
+
+      frontier.push({ id: cid, depth: depth + 1 });
+    }
+  }
+}
+
+// ── Propagation ripple: visual feedback on nodes hit by risk spread ──
+function drawPropagationRipple(ctx, hotspots, propagatedIds, w, h, ts) {
+  if (!propagatedIds || !propagatedIds.length) return;
+  for (const id of propagatedIds) {
+    const hs = hotspots[id];
+    if (!hs || hs.repaired) continue;
+    const p = nodePos(hs, w, h);
+
+    // Expanding ring
+    const rr = NODE_RADIUS + 10 + Math.sin(ts / 200 + id) * 5;
+    ctx.save();
+    ctx.globalAlpha = 0.35 + Math.sin(ts / 250) * 0.1;
+    ctx.strokeStyle = '#ff9800';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, rr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Repair burst: expanding green ring when a node is repaired ──
+function drawRepairBurst(ctx, hotspots, repairedId, repairTime, w, h, ts) {
+  if (repairedId === null || !repairTime) return;
+  const elapsed = ts - repairTime;
+  if (elapsed < 0 || elapsed > 2000) return;
+  const hs = hotspots[repairedId];
+  if (!hs) return;
+  const p = nodePos(hs, w, h);
+
+  const progress = elapsed / 2000;
+  const burstR = NODE_RADIUS + progress * 30;
+  const alpha = (1 - progress) * 0.6;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = '#4caf50';
+  ctx.lineWidth = 3 * (1 - progress);
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, burstR, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+export function drawRiskMap(ctx, state, w, h, timestamp, hoveredId, feedback) {
   const ts = timestamp || 0;
+  const fb = feedback || {};
   ctx.clearRect(0, 0, w, h);
 
   // Scaffold frame outline
@@ -83,6 +184,13 @@ export function drawRiskMap(ctx, state, w, h, timestamp, hoveredId) {
     });
   });
 
+  // Cascade danger preview from selected node
+  drawCascadePreview(ctx, state, state.selected_hotspot, w, h, ts);
+  // Propagation ripple on recently affected nodes
+  drawPropagationRipple(ctx, state.risk_hotspots, fb.propagatedIds, w, h, ts);
+  // Repair burst animation
+  drawRepairBurst(ctx, state.risk_hotspots, fb.lastRepairId, fb.lastRepairTime, w, h, ts);
+
   // Draw hotspot nodes
   state.risk_hotspots.forEach(hs => {
     const p = nodePos(hs, w, h);
@@ -105,6 +213,18 @@ export function drawRiskMap(ctx, state, w, h, timestamp, hoveredId) {
       ctx.globalAlpha = glowAlpha;
       ctx.fill();
       ctx.globalAlpha = 1;
+    }
+
+    // Critical danger zone: pulsing red aura for risk >= 90
+    if (!hs.repaired && hs.risk >= 90) {
+      const dp = Math.sin(ts / 150) * 0.3 + 0.35;
+      ctx.save();
+      ctx.globalAlpha = dp;
+      ctx.fillStyle = '#f44336';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius + 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
 
     // Selection ring (animated dash)
