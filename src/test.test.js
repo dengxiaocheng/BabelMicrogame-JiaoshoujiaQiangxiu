@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   createInitialState, selectHotspot, addToRepairQueue,
   removeFromRepairQueue, reorderRepairQueue, dispatchRepair,
-  propagateRisk, tick
+  propagateRisk, tick, settleRound
 } from './state.js';
 
 describe('createInitialState', () => {
@@ -82,6 +82,29 @@ describe('dispatchRepair', () => {
     const s = { ...createInitialState(), repair_queue: [0], materials: 0 };
     assert.equal(dispatchRepair(s).risk_hotspots[0].repaired, false);
   });
+
+  it('creates chain stress on unrepaired neighbors', () => {
+    let s = createInitialState();
+    // Force known risk values so we can assert changes
+    s = {
+      ...s,
+      repair_queue: [6], // center-ish node (row 1, col 1) with 4 connections: [1,5,7,11]
+      materials: 99,
+      risk_hotspots: s.risk_hotspots.map(h => {
+        if (h.id === 6) return { ...h, risk: 50 };
+        if ([1, 5, 7, 11].includes(h.id)) return { ...h, risk: 20 };
+        return h;
+      })
+    };
+    const next = dispatchRepair(s);
+    // Neighbors should have increased risk from chain stress
+    [1, 5, 7, 11].forEach(nid => {
+      assert.ok(next.risk_hotspots[nid].risk >= 20 + 8,
+        `neighbor ${nid} should have chain stress risk >= 28, got ${next.risk_hotspots[nid].risk}`);
+    });
+    // Target should be repaired
+    assert.ok(next.risk_hotspots[6].repaired);
+  });
 });
 
 describe('propagateRisk', () => {
@@ -107,15 +130,97 @@ describe('tick', () => {
     assert.equal(tick(createInitialState()).time, 299);
   });
 
-  it('wins when time reaches zero', () => {
-    const s = { ...createInitialState(), time: 1 };
+  it('wins when time reaches zero with sufficient repairs', () => {
+    let s = createInitialState();
+    s = {
+      ...s, time: 1,
+      risk_hotspots: s.risk_hotspots.map((h, i) => i < 10 ? { ...h, repaired: true, risk: 0 } : h)
+    };
     const next = tick(s);
     assert.equal(next.time, 0);
     assert.equal(next.phase, 'won');
   });
 
+  it('loses when time reaches zero without sufficient repairs', () => {
+    const s = { ...createInitialState(), time: 1 };
+    const next = tick(s);
+    assert.equal(next.time, 0);
+    assert.equal(next.phase, 'lost');
+  });
+
+  it('increases pressure from critical hotspots', () => {
+    let s = createInitialState();
+    s = {
+      ...s, collapse_pressure: 0,
+      risk_hotspots: s.risk_hotspots.map((h, i) => i < 6 ? { ...h, risk: 80, repaired: false } : h)
+    };
+    const next = tick(s);
+    assert.ok(next.collapse_pressure > 0, 'pressure should increase from critical hotspots');
+  });
+
   it('does not tick after game ends', () => {
     const s = { ...createInitialState(), time: 50, phase: 'lost' };
     assert.equal(tick(s).time, 50);
+  });
+});
+
+describe('settleRound', () => {
+  it('continues playing when no end condition met', () => {
+    const next = settleRound(createInitialState());
+    assert.equal(next.phase, 'playing');
+  });
+
+  it('wins when all hotspots repaired', () => {
+    let s = createInitialState();
+    s = { ...s, risk_hotspots: s.risk_hotspots.map(h => ({ ...h, repaired: true, risk: 0 })) };
+    assert.equal(settleRound(s).phase, 'won');
+  });
+
+  it('loses when collapse pressure at 100', () => {
+    const s = { ...createInitialState(), collapse_pressure: 100 };
+    assert.equal(settleRound(s).phase, 'lost');
+  });
+
+  it('no-ops after game ended', () => {
+    const s = { ...createInitialState(), phase: 'lost' };
+    assert.equal(settleRound(s).phase, 'lost');
+  });
+});
+
+describe('state coupling', () => {
+  it('dispatchRepair pushes both resource and risk pressure', () => {
+    let s = createInitialState();
+    s = {
+      ...s,
+      repair_queue: [6],
+      materials: 30,
+      collapse_pressure: 20,
+      risk_hotspots: s.risk_hotspots.map(h => {
+        if (h.id === 6) return { ...h, risk: 50 };
+        return h;
+      })
+    };
+    const next = dispatchRepair(s);
+    // Resource pressure: materials decreased
+    assert.ok(next.materials < 30, 'materials should decrease');
+    // Risk pressure: collapse pressure changed (reduced by repair but increased by chain stress)
+    assert.ok(next.collapse_pressure !== s.collapse_pressure, 'collapse pressure should change');
+    // Risk pressure: at least one neighbor's risk increased
+    const origNeighbors = s.risk_hotspots[6].connections.map(cid => s.risk_hotspots[cid].risk);
+    const newNeighbors = s.risk_hotspots[6].connections.map(cid => next.risk_hotspots[cid].risk);
+    assert.ok(newNeighbors.some((r, i) => r > origNeighbors[i]), 'neighbor risk should increase from chain stress');
+  });
+
+  it('tick pushes both progress and risk pressure when critical hotspots exist', () => {
+    let s = createInitialState();
+    s = {
+      ...s, time: 100, collapse_pressure: 10,
+      risk_hotspots: s.risk_hotspots.map((h, i) => i < 9 ? { ...h, risk: 80, repaired: false } : h)
+    };
+    const next = tick(s);
+    // Progress pressure: time decreased
+    assert.equal(next.time, 99);
+    // Risk pressure: collapse pressure increased
+    assert.ok(next.collapse_pressure > 10, 'pressure should increase from critical hotspots');
   });
 });

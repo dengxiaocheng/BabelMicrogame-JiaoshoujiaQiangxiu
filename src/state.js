@@ -73,17 +73,25 @@ export function dispatchRepair(state) {
   const cost = Math.ceil(hs.risk / 10);
   if (state.materials < cost) return state;
 
-  const newHotspots = state.risk_hotspots.map(h =>
-    h.id === targetId ? { ...h, risk: 0, repaired: true } : h
-  );
+  // State coupling: repair consumes materials (resource pressure)
+  // AND creates chain stress on unrepaired neighbors (risk pressure)
+  const newHotspots = state.risk_hotspots.map(h => {
+    if (h.id === targetId) return { ...h, risk: 0, repaired: true };
+    if (!h.repaired && hs.connections.includes(h.id)) {
+      return { ...h, risk: Math.min(100, h.risk + 8) };
+    }
+    return h;
+  });
+
   const pressureReduction = Math.floor(hs.risk / 3);
+  const chainStress = hs.connections.filter(cid => !state.risk_hotspots[cid].repaired).length * 2;
 
   return {
     ...state,
     materials: state.materials - cost,
     risk_hotspots: newHotspots,
     repair_queue: state.repair_queue.slice(1),
-    collapse_pressure: Math.max(0, state.collapse_pressure - pressureReduction),
+    collapse_pressure: Math.max(0, Math.min(100, state.collapse_pressure - pressureReduction + chainStress)),
     selected_hotspot: null
   };
 }
@@ -116,5 +124,33 @@ export function propagateRisk(state) {
 export function tick(state) {
   if (state.phase !== 'playing') return state;
   const newTime = state.time - 1;
-  return { ...state, time: newTime, phase: newTime <= 0 ? 'won' : state.phase };
+
+  // State coupling: time decreases (progress pressure)
+  // AND collapse pressure rises from critical hotspots (risk pressure)
+  const criticalCount = state.risk_hotspots.filter(h => !h.repaired && h.risk >= 70).length;
+  const pressureIncrease = Math.floor(criticalCount / 3);
+  const newPressure = Math.min(100, state.collapse_pressure + pressureIncrease);
+
+  let phase = state.phase;
+  if (newTime <= 0) {
+    const repairedCount = state.risk_hotspots.filter(h => h.repaired).length;
+    const repairRatio = repairedCount / state.risk_hotspots.length;
+    phase = repairRatio >= 0.5 ? 'won' : 'lost';
+  }
+  if (newPressure >= 100) phase = 'lost';
+
+  return { ...state, time: newTime, collapse_pressure: newPressure, phase };
+}
+
+// settleRound: evaluate state after one complete core loop cycle
+export function settleRound(state) {
+  if (state.phase !== 'playing') return state;
+
+  const total = state.risk_hotspots.length;
+  const repaired = state.risk_hotspots.filter(h => h.repaired).length;
+
+  if (repaired === total) return { ...state, phase: 'won' };
+  if (state.collapse_pressure >= 100) return { ...state, phase: 'lost' };
+
+  return state;
 }

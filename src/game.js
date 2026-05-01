@@ -2,7 +2,7 @@
 import {
   createInitialState, selectHotspot, addToRepairQueue,
   removeFromRepairQueue, reorderRepairQueue, dispatchRepair,
-  propagateRisk, tick
+  propagateRisk, tick, settleRound
 } from './state.js';
 import { drawRiskMap, hitTestHotspot, renderRepairQueue } from './risk-map.js';
 
@@ -35,18 +35,22 @@ export function init() {
   // Dispatch: consume materials to repair first queued hotspot
   document.getElementById('btn-dispatch').addEventListener('click', () => {
     state = dispatchRepair(state);
+    state = settleRound(state);
     render();
+    if (state.phase !== 'playing') endGame();
   });
 
   // Core loop timers
   tickTimer = setInterval(() => {
     state = tick(state);
+    state = settleRound(state);
     render();
     if (state.phase !== 'playing') endGame();
   }, 1000);
 
   propTimer = setInterval(() => {
     state = propagateRisk(state);
+    state = settleRound(state);
     render();
     if (state.phase !== 'playing') endGame();
   }, 5000);
