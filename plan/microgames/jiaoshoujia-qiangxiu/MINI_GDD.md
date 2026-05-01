@@ -13,11 +13,11 @@
 
 ## State
 
-- resource
-- pressure
-- risk
-- relation
-- round
+- materials
+- risk_hotspots
+- repair_queue
+- collapse_pressure
+- time
 
 ## UI
 
