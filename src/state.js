@@ -162,3 +162,40 @@ export function settleRound(state) {
 
   return state;
 }
+
+// settleGame: compute final settlement from terminal state
+// Produces grade + breakdown — driven by Required State, not narrative text
+export function settleGame(state) {
+  const total = state.risk_hotspots.length;
+  const repaired = state.risk_hotspots.filter(h => h.repaired).length;
+  const repairRatio = repaired / total;
+
+  let grade, verdict;
+  if (state.phase === 'lost') {
+    grade = 'F';
+    verdict = '结构坍塌';
+  } else if (repairRatio >= 0.9 && state.collapse_pressure < 30 && state.time > 60) {
+    grade = 'S';
+    verdict = '完美抢修';
+  } else if (repairRatio >= 0.75 && state.collapse_pressure < 50) {
+    grade = 'A';
+    verdict = '优秀抢修';
+  } else if (state.collapse_pressure < 70) {
+    grade = 'B';
+    verdict = '合格抢修';
+  } else {
+    grade = 'C';
+    verdict = '勉强抢修';
+  }
+
+  return {
+    grade,
+    verdict,
+    repaired,
+    total,
+    repairRatio: Math.round(repairRatio * 100),
+    materialsLeft: state.materials,
+    collapsePressure: state.collapse_pressure,
+    timeLeft: state.time
+  };
+}

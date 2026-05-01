@@ -2,7 +2,7 @@
 import {
   createInitialState, selectHotspot, addToRepairQueue,
   removeFromRepairQueue, reorderRepairQueue, dispatchRepair,
-  propagateRisk, tick, settleRound
+  propagateRisk, tick, settleRound, settleGame
 } from './state.js';
 import { drawRiskMap, hitTestHotspot, renderRepairQueue } from './risk-map.js';
 import { getChannelColor, getHotspotLabel } from './content/events.js';
@@ -12,6 +12,11 @@ let hoveredHotspot = null;
 let feedback = { propagatedIds: [], lastRepairId: null, lastRepairTime: 0 };
 
 export function init() {
+  // Clean up previous session timers if restarting
+  if (tickTimer) clearInterval(tickTimer);
+  if (propTimer) clearInterval(propTimer);
+  if (animFrame) cancelAnimationFrame(animFrame);
+
   state = createInitialState();
   canvas = document.getElementById('risk-map');
   ctx = canvas.getContext('2d');
@@ -267,25 +272,37 @@ function endGame() {
   clearInterval(propTimer);
   cancelAnimationFrame(animFrame);
 
-  // Show end overlay with stats
+  // Compute settlement from terminal state
+  const settlement = settleGame(state);
+
   const overlay = document.getElementById('end-overlay');
   const title = document.getElementById('end-title');
   const stats = document.getElementById('end-stats');
 
-  const total = state.risk_hotspots.length;
-  const repaired = state.risk_hotspots.filter(h => h.repaired).length;
+  title.textContent = settlement.verdict;
+  title.style.color = settlement.grade === 'F' ? '#f44336' : '#4caf50';
 
-  if (state.phase === 'won') {
-    title.textContent = '抢修完成';
-    title.style.color = '#4caf50';
-  } else {
-    title.textContent = '结构坍塌';
-    title.style.color = '#f44336';
-  }
+  const gradeColors = { S: '#ffd700', A: '#4caf50', B: '#2196f3', C: '#ff9800', F: '#f44336' };
   stats.innerHTML =
-    `修复节点: ${repaired}/${total}<br>` +
-    `剩余材料: ${state.materials}<br>` +
-    `塌陷压力: ${state.collapse_pressure}%`;
+    `<div style="font-size:48px;color:${gradeColors[settlement.grade]};font-weight:bold;text-align:center;margin:8px 0">${settlement.grade}</div>` +
+    `<div>修复节点: ${settlement.repaired}/${settlement.total} (${settlement.repairRatio}%)</div>` +
+    `<div>剩余材料: ${settlement.materialsLeft}</div>` +
+    `<div>塌陷压力: ${settlement.collapsePressure}%</div>` +
+    `<div>剩余时间: ${settlement.timeLeft}s</div>`;
+
+  // Add restart button if not already present
+  if (!document.getElementById('btn-restart')) {
+    const btn = document.createElement('button');
+    btn.id = 'btn-restart';
+    btn.textContent = '重新开始';
+    btn.style.cssText = 'margin-top:16px;padding:10px 24px;background:#e94560;color:#fff;border:none;border-radius:4px;cursor:pointer;font-family:monospace;font-size:14px;font-weight:bold;letter-spacing:2px';
+    btn.addEventListener('click', () => {
+      overlay.classList.remove('show');
+      btn.remove();
+      init();
+    });
+    overlay.appendChild(btn);
+  }
 
   overlay.classList.add('show');
 }
