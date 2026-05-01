@@ -16,6 +16,23 @@ function pickRandom(arr, n) {
   return shuffled.slice(0, n);
 }
 
+// ── Scene Object Labels ──
+// Grid 5×4: row0=横杆, row1=立柱, row2=连接件, row3=平台板
+// Columns labeled A–E by sector
+const PART_BY_ROW = ['横杆', '立柱', '连接件', '平台板'];
+const SECTOR_BY_COL = ['A', 'B', 'C', 'D', 'E'];
+
+export const HOTSPOT_PARTS = [];
+for (let r = 0; r < 4; r++) {
+  for (let c = 0; c < 5; c++) {
+    HOTSPOT_PARTS.push(`${SECTOR_BY_COL[c]}区${PART_BY_ROW[r]}`);
+  }
+}
+
+export function getHotspotLabel(id) {
+  return HOTSPOT_PARTS[id] || `节点${id}`;
+}
+
 export const EVENT_POOL = [
   // ── Risk Spike: sudden gust hits vulnerable nodes ──
   {
@@ -37,10 +54,10 @@ export const EVENT_POOL = [
         }
         return h;
       });
-      const ids = targets.map(t => t.id).join('、');
+      const labels = targets.map(t => getHotspotLabel(t.id)).join('、');
       return {
         state: { ...state, risk_hotspots: newHotspots },
-        messages: [{ text: `阵风冲击！节点 ${ids} 松动加剧！`, channel: 'risk' }]
+        messages: [{ text: `阵风冲击！${labels} 松动加剧！`, channel: 'risk' }]
       };
     }
   },
@@ -72,11 +89,11 @@ export const EVENT_POOL = [
 
       const pressureJump = critical.length * 4;
       const newPressure = Math.min(100, state.collapse_pressure + pressureJump);
-      const ids = uniqueAffected.slice(0, 4).join('、');
+      const labels = uniqueAffected.slice(0, 4).map(id => getHotspotLabel(id)).join('、');
       return {
         state: { ...state, risk_hotspots: newHotspots, collapse_pressure: newPressure },
         messages: [{
-          text: `连锁承压！节点 ${ids} 受到波及，塌陷压力 +${pressureJump}`,
+          text: `连锁承压！${labels} 受到波及，塌陷压力 +${pressureJump}`,
           channel: 'collapse'
         }]
       };
@@ -128,11 +145,11 @@ export const EVENT_POOL = [
         return h;
       });
 
-      const ids = affected.join('、');
+      const labels = affected.map(id => getHotspotLabel(id)).join('、');
       return {
         state: { ...state, risk_hotspots: newHotspots },
         messages: [{
-          text: `结构重心偏移！节点 ${ids} 承压增加！`,
+          text: `结构重心偏移！${labels} 承压增加！`,
           channel: 'risk'
         }]
       };
@@ -273,11 +290,145 @@ export const EVENT_POOL = [
         return h;
       });
 
+      const label = getHotspotLabel(target.id);
+      const newRisk = Math.min(100, target.risk + 18);
       return {
         state: { ...state, risk_hotspots: newHotspots },
         messages: [{
-          text: `节点 ${target.id} 螺栓松动！风险骤升至 ${Math.min(100, target.risk + 18)}！`,
+          text: `${label} 螺栓松动！风险骤升至 ${newRisk}！`,
           channel: 'risk'
+        }]
+      };
+    }
+  },
+
+  // ── Queue Escalation: queued nodes deteriorate while waiting for dispatch ──
+  {
+    id: 'queue_escalation',
+    weight: 9,
+    cooldown: 25,
+    trigger(state) {
+      return state.repair_queue.length >= 1 &&
+        state.repair_queue.some(qid => {
+          const h = state.risk_hotspots[qid];
+          return h && !h.repaired && h.risk >= 50;
+        });
+    },
+    apply(state) {
+      const queued = state.repair_queue
+        .map(qid => state.risk_hotspots[qid])
+        .filter(h => h && !h.repaired && h.risk >= 50);
+      if (!queued.length) return { state, messages: [] };
+
+      const target = queued[0];
+      const boost = 12 + Math.floor(Math.random() * 8);
+      const newHotspots = state.risk_hotspots.map(h =>
+        h.id === target.id ? { ...h, risk: Math.min(100, h.risk + boost) } : h
+      );
+      const newPressure = Math.min(100, state.collapse_pressure + 3);
+      const label = getHotspotLabel(target.id);
+      const pos = state.repair_queue.indexOf(target.id) + 1;
+      return {
+        state: { ...state, risk_hotspots: newHotspots, collapse_pressure: newPressure },
+        messages: [{
+          text: `队列第${pos}位 ${label} 风险攀升！等待修复期间松动加剧！`,
+          channel: 'risk'
+        }]
+      };
+    }
+  },
+
+  // ── Multi-Critical Surge: several nodes hit critical simultaneously (Phase 4) ──
+  {
+    id: 'multi_critical_surge',
+    weight: 11,
+    cooldown: 45,
+    trigger(state) {
+      return state.risk_hotspots.filter(h => !h.repaired && h.risk >= 75).length >= 3
+        && state.time <= 200;
+    },
+    apply(state) {
+      const critical = state.risk_hotspots.filter(h => !h.repaired && h.risk >= 75);
+      if (critical.length < 3) return { state, messages: [] };
+
+      const newHotspots = state.risk_hotspots.map(h => {
+        if (!h.repaired && h.risk >= 75) {
+          return { ...h, risk: Math.min(100, h.risk + 6) };
+        }
+        return h;
+      });
+      const pressureJump = critical.length * 3;
+      const newPressure = Math.min(100, state.collapse_pressure + pressureJump);
+      const labels = critical.slice(0, 3).map(h => getHotspotLabel(h.id)).join('、');
+      return {
+        state: { ...state, risk_hotspots: newHotspots, collapse_pressure: newPressure },
+        messages: [{
+          text: `多点同时临界！${labels} 塌陷风险急剧上升！`,
+          channel: 'collapse'
+        }]
+      };
+    }
+  },
+
+  // ── Material Drain: unexpected consumption (Phase 3 resource squeeze) ──
+  {
+    id: 'material_drain',
+    weight: 5,
+    cooldown: 50,
+    trigger(state) {
+      return state.materials >= 8 && state.materials <= 20
+        && state.time <= 210 && state.time > 60;
+    },
+    apply(state) {
+      const loss = 4 + Math.floor(Math.random() * 4);
+      const newMaterials = Math.max(0, state.materials - loss);
+      return {
+        state: { ...state, materials: newMaterials },
+        messages: [{
+          text: `临时加固消耗额外材料！-${loss}（剩余 ${newMaterials}）`,
+          channel: 'materials'
+        }]
+      };
+    }
+  },
+
+  // ── Breakthrough Cluster: repairing a cluster of connected nodes gives bonus ──
+  {
+    id: 'breakthrough_cluster',
+    weight: 4,
+    cooldown: 35,
+    trigger(state) {
+      return state.risk_hotspots.some(h => {
+        if (h.repaired) return false;
+        const repairedNeighbors = h.connections.filter(
+          cid => state.risk_hotspots[cid].repaired
+        );
+        return repairedNeighbors.length >= 3;
+      });
+    },
+    apply(state) {
+      const targets = state.risk_hotspots.filter(h => {
+        if (h.repaired) return false;
+        const repairedNeighbors = h.connections.filter(
+          cid => state.risk_hotspots[cid].repaired
+        );
+        return repairedNeighbors.length >= 3;
+      });
+      if (!targets.length) return { state, messages: [] };
+
+      const target = targets[Math.floor(Math.random() * targets.length)];
+      const relief = 15 + Math.floor(Math.random() * 10);
+      const newHotspots = state.risk_hotspots.map(h =>
+        h.id === target.id ? { ...h, risk: Math.max(0, h.risk - relief) } : h
+      );
+      const pressureDrop = 4;
+      const newPressure = Math.max(0, state.collapse_pressure - pressureDrop);
+      const label = getHotspotLabel(target.id);
+      return {
+        state: { ...state, risk_hotspots: newHotspots, collapse_pressure: newPressure },
+        messages: [{
+          text: `周边加固见效！${label} 承压大幅降低，塌陷压力 -${pressureDrop}`,
+          channel: 'collapse'
         }]
       };
     }
