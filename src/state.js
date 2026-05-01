@@ -1,6 +1,8 @@
 // State management for 脚手架抢修 core loop
 // Required State: materials, risk_hotspots, repair_queue, collapse_pressure, time
 
+import { resolveEvents } from './content/events.js';
+
 const COLS = 5, ROWS = 4;
 
 export function createInitialState() {
@@ -34,7 +36,9 @@ export function createInitialState() {
     collapse_pressure: 0,
     time: 300,
     selected_hotspot: null,
-    phase: 'playing'
+    phase: 'playing',
+    event_cooldowns: {},
+    pending_events: []
   };
 }
 
@@ -113,12 +117,16 @@ export function propagateRisk(state) {
   });
 
   const newPressure = Math.min(100, state.collapse_pressure + Math.floor(totalPressure / 3));
-  return {
+  let result = {
     ...state,
     risk_hotspots: newHotspots,
     collapse_pressure: newPressure,
     phase: newPressure >= 100 ? 'lost' : state.phase
   };
+
+  // Resolve content events after risk propagation
+  const eventResult = resolveEvents(result);
+  return { ...eventResult.state, pending_events: eventResult.messages };
 }
 
 export function tick(state) {
@@ -139,7 +147,7 @@ export function tick(state) {
   }
   if (newPressure >= 100) phase = 'lost';
 
-  return { ...state, time: newTime, collapse_pressure: newPressure, phase };
+  return { ...state, time: newTime, collapse_pressure: newPressure, phase, pending_events: [] };
 }
 
 // settleRound: evaluate state after one complete core loop cycle
