@@ -33,6 +33,7 @@ This repository is an independent Babel microgame source repository for: 脚手�
 ~~~
 
 - Worker finish and manager review must create and close BabelMicrogames audit issues through babel-ops manager audit.
+- Audit issues must inherit s commit trace links: issue bodies and close comments include the current HEAD GitHub commit URL automatically when the unified Go bridge is used.
 - Audit issue failure is blocking; do not mark work complete by only editing local registry files.
 
 See PROCESS_CONTRACT.md for the longer operational contract.
