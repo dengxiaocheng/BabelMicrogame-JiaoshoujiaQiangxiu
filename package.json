@@ -1,0 +1,11 @@
+{
+  "name": "jiaoshoujia-qiangxiu",
+  "version": "0.1.0",
+  "description": "脚手架抢修 - Scaffolding Emergency Repair Microgame",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx serve .",
+    "test": "node --test src/test.test.js"
+  }
+}
