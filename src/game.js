@@ -5,7 +5,7 @@ import {
   propagateRisk, tick, settleRound
 } from './state.js';
 import { drawRiskMap, hitTestHotspot, renderRepairQueue } from './risk-map.js';
-import { getChannelColor } from './content/events.js';
+import { getChannelColor, getHotspotLabel } from './content/events.js';
 
 let state, canvas, ctx, queuePanel, tickTimer, propTimer, animFrame;
 let hoveredHotspot = null;
@@ -87,6 +87,11 @@ function renderDOM() {
   document.getElementById('stat-time').textContent = state.time;
   document.getElementById('stat-materials').textContent = state.materials;
 
+  // Repair progress — how close to winning
+  const repaired = state.risk_hotspots.filter(h => h.repaired).length;
+  const total = state.risk_hotspots.length;
+  document.getElementById('stat-progress').textContent = `${repaired}/${total}`;
+
   // Pressure gauge — core pressure visibility
   const p = state.collapse_pressure;
   const fill = document.getElementById('pressure-fill');
@@ -150,7 +155,7 @@ function renderNodeInfo() {
   if (!hs) return;
 
   if (hs.repaired) {
-    panel.innerHTML = `<span class="lbl">节点</span><span class="val">#${hs.id}</span> <span class="ok">已修复</span>`;
+    panel.innerHTML = `<span class="lbl">节点</span><span class="val">${getHotspotLabel(hs.id)}</span> <span class="ok">已修复</span>`;
     return;
   }
 
@@ -161,7 +166,7 @@ function renderNodeInfo() {
   const enoughMat = state.materials >= cost;
 
   let html =
-    `<div><span class="lbl">节点</span><span class="val">#${hs.id}</span></div>` +
+    `<div><span class="lbl">节点</span><span class="val">${getHotspotLabel(hs.id)}</span></div>` +
     `<div><span class="lbl">风险</span><span class="val" style="color:${rc}">${hs.risk}</span></div>` +
     `<div><span class="lbl">耗材</span><span class="val" style="color:${enoughMat ? '#2196f3' : '#f44336'}">${cost}</span>` +
     `<span class="lbl"> / 库存 ${state.materials}</span></div>` +
@@ -188,6 +193,16 @@ function updateStepIndicator() {
     if (i < active) el.classList.add('done');
     if (i === active) el.classList.add('active');
   });
+
+  // Dynamic hint guiding player through core loop
+  const hints = [
+    '点击脚手架节点查看风险详情',
+    '再次点击将此节点加入抢修队列',
+    '拖拽队列卡片调整抢修优先级，然后派工',
+    '点击「派工抢修」消耗材料修复队首节点',
+    '观察风险传播，准备下一轮抢修'
+  ];
+  document.getElementById('hint').textContent = hints[active];
 }
 
 function endGame() {

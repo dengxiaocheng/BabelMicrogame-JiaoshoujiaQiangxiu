@@ -1,4 +1,5 @@
 // Risk map canvas rendering with animated scene-object interaction
+import { getHotspotLabel } from './content/events.js';
 // Primary input: click hotspots on scaffolding risk map to build repair queue
 
 const COLS = 5, ROWS = 4, NODE_RADIUS = 18;
@@ -29,6 +30,23 @@ export function drawRiskMap(ctx, state, w, h, timestamp, hoveredId) {
   ctx.setLineDash([6, 4]);
   ctx.strokeRect(35, 25, w - 70, h - 50);
   ctx.setLineDash([]);
+
+  // Scaffold structure labels — rows = scaffolding parts, columns = sectors
+  const spx = 70, spy = 55;
+  ctx.font = '11px monospace';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#445';
+  ['横杆', '立柱', '连接件', '平台板'].forEach((label, r) => {
+    const y = spy + r * ((h - spy * 2) / (ROWS - 1));
+    ctx.fillText(label, spx - 12, y);
+  });
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = 'center';
+  ['A区', 'B区', 'C区', 'D区', 'E区'].forEach((label, c) => {
+    const x = spx + c * ((w - spx * 2) / (COLS - 1));
+    ctx.fillText(label, x, spy - 10);
+  });
 
   // Draw connections (scaffolding beams)
   state.risk_hotspots.forEach(hs => {
@@ -140,6 +158,15 @@ export function drawRiskMap(ctx, state, w, h, timestamp, hoveredId) {
       ctx.fillText('' + hs.risk, p.x, p.y);
     }
 
+    // Part label on hover/select — shows scaffolding context
+    if ((isSelected || isHovered) && !hs.repaired) {
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = '#ddd';
+      ctx.fillText(getHotspotLabel(hs.id), p.x, p.y - radius - 8);
+    }
+
     // Cost badge on selected node
     if (isSelected && !hs.repaired) {
       const cost = Math.ceil(hs.risk / 10);
@@ -198,7 +225,7 @@ export function renderRepairQueue(container, state, callbacks) {
     card.dataset.index = idx;
     card.innerHTML =
       `<span class="queue-num">${idx + 1}</span>` +
-      `<span class="queue-label">节点${hid}</span>` +
+      `<span class="queue-label">${getHotspotLabel(hid)}</span>` +
       `<span class="queue-risk" style="color:${riskColor(hs.risk)}">${hs.risk}</span>` +
       `<span class="queue-cost">-${cost}</span>` +
       `<span class="queue-remove">\u00d7</span>`;
